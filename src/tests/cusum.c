@@ -62,6 +62,8 @@ static const enum test test_num = TEST_CUSUM;	// This test number
 static double compute_pi_value(struct state *state, long int z);
 static bool CumulativeSums_print_stat(FILE * stream, struct state *state, struct CumulativeSums_private_stats *stat,
 				      double p_value, double rev_p_value);
+static bool CumulativeSums_print_table_header(FILE * stream);
+static bool CumulativeSums_print_table_line(FILE * stream, long int iteration, double p_value_forward, double p_value_backward);
 static bool CumulativeSums_print_p_value(FILE * stream, double p_value);
 static void CumulativeSums_metric_print(struct state *state, long int sampleCount, long int toolow,
 					long int *freqPerBin, int index);
@@ -565,6 +567,83 @@ CumulativeSums_print_p_value(FILE * stream, double p_value)
 
 
 /*
+ * CumulativeSums_print_table_header - print table header to the end of an open file
+ *
+ * given:
+ *      stream          // open writable FILE stream
+ *
+ * returns:
+ *      true --> no errors
+ *      false --> an I/O error occurred
+ */
+static bool
+CumulativeSums_print_table_header(FILE * stream)
+{
+	int io_ret;		// I/O return status
+
+	/*
+	 * Check preconditions (firewall)
+	 */
+	if (stream == NULL) {
+		err(39, __func__, "stream arg is NULL");
+	}
+
+	/*
+	 * Print table header to a file
+	 */
+	io_ret = fputs("iteration,CumulativeSumsForward,CumulativeSumsBackward\n", stream);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * All printing successful
+	 */
+	return true;
+}
+
+/*
+ * CumulativeSums_print_table_line - print one table line of information to the end of an open file
+ *
+ * given:
+ *      stream           // open writable FILE stream
+ *      iteration        // the test iteration count
+ *      p_value_forward  // the p_value of the forward test
+ *      p_value_backward // the p_value of the backward test
+ *
+ * returns:
+ *      true --> no errors
+ *      false --> an I/O error occurred
+ */
+static bool
+CumulativeSums_print_table_line(FILE * stream, long int iteration, double p_value_forward, double p_value_backward)
+{
+	int io_ret;		// I/O return status
+
+	/*
+	 * Check preconditions (firewall)
+	 */
+	if (stream == NULL) {
+		err(39, __func__, "stream arg is NULL");
+	}
+
+	/*
+	 * Print iteration, p_value_forward and p_value_backward to a file
+	 */
+	io_ret = fprintf(stream, "%ld,%f,%f\n", iteration, p_value_forward != NON_P_VALUE ? p_value_forward : 0,
+			 p_value_backward != NON_P_VALUE ? p_value_backward : 0);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * All printing successful
+	 */
+	return true;
+}
+
+
+/*
  * CumulativeSums_print - print to results.txt, data*.txt, stats.txt for all iterations
  *
  * given:
@@ -583,9 +662,11 @@ CumulativeSums_print(struct state *state)
 	double rev_p_value;		// p_value iteration test result(s) - backward direction
 	FILE *stats = NULL;		// Open stats.txt file
 	FILE *results = NULL;		// Open results.txt file
+	FILE *table = NULL;		// Open table.csv file
 	FILE *data = NULL;		// Open data*.txt file
 	char *stats_txt = NULL;		// Pathname for stats.txt
 	char *results_txt = NULL;	// Pathname for results.txt
+	char *table_csv = NULL;		// Pathname for table.csv
 	char *data_txt = NULL;		// Pathname for data*.txt
 	char data_filename[BUFSIZ + 1];	// Basename for a given data*.txt pathname
 	bool ok;			// true -> I/O was OK
@@ -640,6 +721,22 @@ CumulativeSums_print(struct state *state)
 	results = openTruncate(results_txt);
 
 	/*
+	 * Open table.csv file
+	 */
+	table_csv = filePathName(state->subDir[test_num], "table.csv");
+	dbg(DBG_HIGH, "about to open/truncate: %s", table_csv);
+	table = openTruncate(table_csv);
+
+	/*
+	 * Print table header to table.csv
+	 */
+	errno = 0;	// paranoia
+	ok = CumulativeSums_print_table_header(table);
+	if (ok == false) {
+		errp(34, __func__, "error in writing to %s", table_csv);
+	}
+
+	/*
 	 * Write results.txt and stats.txt files
 	 */
 	for (i = 0; i < state->stats[test_num]->count; ++i) {
@@ -677,6 +774,15 @@ CumulativeSums_print(struct state *state)
 		if (ok == false) {
 			errp(34, __func__, "error in writing to %s", results_txt);
 		}
+
+		/*
+		 * Print table to table.csv
+		 */
+		errno = 0;	// paranoia
+		ok = CumulativeSums_print_table_line(table, i, p_value, rev_p_value);
+		if (ok == false) {
+			errp(34, __func__, "error in writing to %s", table_csv);
+		}
 	}
 
 	/*
@@ -710,6 +816,22 @@ CumulativeSums_print(struct state *state)
 	}
 	free(results_txt);
 	results_txt = NULL;
+
+	/*
+	 * Flush and close table.csv, free pathname
+	 */
+	errno = 0;		// paranoia
+	io_ret = fflush(table);
+	if (io_ret != 0) {
+		errp(34, __func__, "error flushing to: %s", table_csv);
+	}
+	errno = 0;		// paranoia
+	io_ret = fclose(table);
+	if (io_ret != 0) {
+		errp(34, __func__, "error closing: %s", table_csv);
+	}
+	free(table_csv);
+	table_csv = NULL;
 
 	/*
 	 * Write data*.txt for each data file if we need to partition results
