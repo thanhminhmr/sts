@@ -216,6 +216,8 @@ static const struct runs_table runs_table[] = {
 static bool LongestRunOfOnes_print_stat(FILE * stream, struct state *state, struct LongestRunOfOnes_private_stats *stat,
 					double p_value);
 static bool LongestRunOfOnes_print_p_value(FILE * stream, double p_value);
+static bool LongestRunOfOnes_print_table_header(FILE * stream);
+static bool LongestRunOfOnes_print_table_line(FILE * stream, long int iteration, double p_value);
 static void LongestRunOfOnes_metric_print(struct state *state, long int sampleCount, long int toolow, long int *freqPerBin);
 
 
@@ -795,6 +797,81 @@ LongestRunOfOnes_print_p_value(FILE * stream, double p_value)
 
 
 /*
+ * LongestRunOfOnes_print_table_header - print table header to the end of an open file
+ *
+ * given:
+ *      stream          // open writable FILE stream
+ *
+ * returns:
+ *      true --> no errors
+ *      false --> an I/O error occurred
+ */
+static bool
+LongestRunOfOnes_print_table_header(FILE * stream)
+{
+	int io_ret;		// I/O return status
+
+	/*
+	 * Check preconditions (firewall)
+	 */
+	if (stream == NULL) {
+		err(119, __func__, "stream arg is NULL");
+	}
+
+	/*
+	 * Print table header to a file
+	 */
+	io_ret = fputs("iteration,LongestRunOfOnes\n", stream);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * All printing successful
+	 */
+	return true;
+}
+
+/*
+ * LongestRunOfOnes_print_table_line - print one table line of information to the end of an open file
+ *
+ * given:
+ *      stream          // open writable FILE stream
+ *      iteration       // the test iteration count
+ *      p_value         // the p_value of the test
+ *
+ * returns:
+ *      true --> no errors
+ *      false --> an I/O error occurred
+ */
+static bool
+LongestRunOfOnes_print_table_line(FILE * stream, long int iteration, double p_value)
+{
+	int io_ret;		// I/O return status
+
+	/*
+	 * Check preconditions (firewall)
+	 */
+	if (stream == NULL) {
+		err(119, __func__, "stream arg is NULL");
+	}
+
+	/*
+	 * Print iteration and p_value to a file
+	 */
+	io_ret = fprintf(stream, "%ld,%f\n", iteration, p_value != NON_P_VALUE ? p_value : 0.0);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * All printing successful
+	 */
+	return true;
+}
+
+
+/*
  * LongestRunOfOnes_print - print to results.txt, data*.txt, stats.txt for all iterations
  *
  * given:
@@ -812,9 +889,11 @@ LongestRunOfOnes_print(struct state *state)
 	double p_value;			// p_value iteration test result(s)
 	FILE *stats = NULL;		// Open stats.txt file
 	FILE *results = NULL;		// Open results.txt file
+	FILE *table = NULL;		// Open table.csv file
 	FILE *data = NULL;		// Open data*.txt file
 	char *stats_txt = NULL;		// Pathname for stats.txt
 	char *results_txt = NULL;	// Pathname for results.txt
+	char *table_csv = NULL;		// Pathname for table.csv
 	char *data_txt = NULL;		// Pathname for data*.txt
 	char data_filename[BUFSIZ + 1];	// Basename for a given data*.txt pathname
 	bool ok;			// true -> I/O was OK
@@ -869,6 +948,22 @@ LongestRunOfOnes_print(struct state *state)
 	results = openTruncate(results_txt);
 
 	/*
+	 * Open table.csv file
+	 */
+	table_csv = filePathName(state->subDir[test_num], "table.csv");
+	dbg(DBG_HIGH, "about to open/truncate: %s", table_csv);
+	table = openTruncate(table_csv);
+
+	/*
+	 * Print table header to table.csv
+	 */
+	errno = 0;		// paranoia
+	ok = LongestRunOfOnes_print_table_header(table);
+	if (ok == false) {
+		errp(114, __func__, "error in writing to %s", table_csv);
+	}
+
+	/*
 	 * Write results.txt and stats.txt files
 	 */
 	for (i = 0; i < state->stats[test_num]->count; ++i) {
@@ -899,6 +994,15 @@ LongestRunOfOnes_print(struct state *state)
 		ok = LongestRunOfOnes_print_p_value(results, p_value);
 		if (ok == false) {
 			errp(114, __func__, "error in writing to %s", results_txt);
+		}
+
+		/*
+		 * Print table to table.csv
+		 */
+		errno = 0;	// paranoia
+		ok = LongestRunOfOnes_print_table_line(table, i, p_value);
+		if (ok == false) {
+			errp(114, __func__, "error in writing to %s", table_csv);
 		}
 	}
 
@@ -933,6 +1037,22 @@ LongestRunOfOnes_print(struct state *state)
 	}
 	free(results_txt);
 	results_txt = NULL;
+
+	/*
+	 * Flush and close table.csv, free pathname
+	 */
+	errno = 0;		// paranoia
+	io_ret = fflush(table);
+	if (io_ret != 0) {
+		errp(114, __func__, "error flushing to: %s", table_csv);
+	}
+	errno = 0;		// paranoia
+	io_ret = fclose(table);
+	if (io_ret != 0) {
+		errp(114, __func__, "error closing: %s", table_csv);
+	}
+	free(table_csv);
+	table_csv = NULL;
 
 	/*
 	 * Write data*.txt for each data file if we need to partition results
