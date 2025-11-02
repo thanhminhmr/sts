@@ -166,6 +166,10 @@ static bool NonOverlappingTemplateMatchings_print_stat(FILE * stream, struct sta
 						       struct NonOverlappingTemplateMatchings_private_stats *stat,
 						       struct dyn_array *nonover_stats, long int nonstat_index);
 static bool NonOverlappingTemplateMatchings_print_p_value(FILE * stream, double p_value);
+static bool NonOverlappingTemplateMatchings_print_table_header(FILE * stream, struct state *state);
+static bool NonOverlappingTemplateMatchings_print_table_line(FILE * stream, long int iteration,
+							     struct dyn_array *nonover_stats, long int nonstat_index,
+							     long int nonstat_length);
 static void NonOverlappingTemplateMatchings_metric_print(struct state *state, long int sampleCount, long int toolow,
 							 long int *freqPerBin);
 
@@ -920,6 +924,153 @@ NonOverlappingTemplateMatchings_print_p_value(FILE * stream, double p_value)
 
 
 /*
+ * NonOverlappingTemplateMatchings_print_table_header - print table header to the end of an open file
+ *
+ * given:
+ *      stream          // open writable FILE stream
+ *
+ * returns:
+ *      true --> no errors
+ *      false --> an I/O error occurred
+ */
+static bool
+NonOverlappingTemplateMatchings_print_table_header(FILE * stream, struct state *state)
+{
+	int io_ret;		// I/O return status
+	long int i;
+	long int j;
+
+	/*
+	 * Check preconditions (firewall)
+	 */
+	if (stream == NULL) {
+		err(139, __func__, "stream arg is NULL");
+	}
+
+	/*
+	 * Print table header to a file
+	 */
+	io_ret = fputs("iteration", stream);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * Print table header for each template
+	 */
+	for (i = 0; i < numOfTemplates[state->tp.nonOverlappingTemplateLength]; ++i) {
+		/*
+		 * Print table header prefix
+		 */
+		io_ret = fputs(",NonOverlappingTemplateMatchings_", stream);
+		if (io_ret == EOF) {
+			return false;
+		}
+
+		/*
+		 * Print template bits
+		 */
+		for (j = 0; j < state->tp.nonOverlappingTemplateLength; j++) {
+			io_ret = fprintf(stream, "%1d", get_value(state->nonovTemplates, BitSequence,
+								state->tp.nonOverlappingTemplateLength * i + j));
+			if (io_ret <= 0) {
+				return false;
+			}
+		}
+	}
+
+	/*
+	 * Print table header new line to a file
+	 */
+	io_ret = fputc('\n', stream);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * All printing successful
+	 */
+	return true;
+}
+
+/*
+ * NonOverlappingTemplateMatchings_print_table_line - print one table line of information to the end of an open file
+ *
+ * given:
+ *      stream          // open writable FILE stream
+ *      iteration       // the test iteration count
+ *      nonover_stats   // dynamic array of nonover_stats values
+ *      nonstat_index   // starting index in nonover_stats array for 1st template of the iteration
+ *      nonstat_length  // count of templates of the iteration
+ *
+ * returns:
+ *      true --> no errors
+ *      false --> an I/O error occurred
+ */
+static bool
+NonOverlappingTemplateMatchings_print_table_line(FILE * stream, long int iteration, struct dyn_array *nonover_stats,
+						 long int nonstat_index, long int nonstat_length)
+{
+	int io_ret;				// I/O return status
+	struct nonover_stats *nonover_stat;	// Current nonover_stats for a given iteration
+	long int i;
+
+	/*
+	 * Check preconditions (firewall)
+	 */
+	if (stream == NULL) {
+		err(139, __func__, "stream arg is NULL");
+	}
+
+	/*
+	 * Print iteration to a file
+	 */
+	io_ret = fprintf(stream, "%ld", iteration);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * Print all p_value to a file
+	 */
+	for (i = 0; i < nonstat_length; ++i, ++nonstat_index) {
+		/*
+		 * Find address of the current nonover_stats element
+		 */
+		if (nonstat_index >= nonover_stats->count) {
+			err(139, __func__, "nonstat_index: %ld went beyond nonover_stats dyn_array count: %ld",
+			    nonstat_index, nonover_stats->count);
+		}
+		if (nonstat_index < 0) {
+			err(139, __func__, "nonstat_index: %ld underflowed < 0", nonstat_index);
+		}
+		nonover_stat = addr_value(nonover_stats, struct nonover_stats, nonstat_index);
+
+		/*
+		 * Print p_value
+		 */
+		io_ret = fprintf(stream, ",%f", nonover_stat->p_value != NON_P_VALUE ? nonover_stat->p_value : 0.0);
+		if (io_ret <= 0) {
+			return false;
+		}
+	}
+
+	/*
+	 * Print new line to a file
+	 */
+	io_ret = fputc('\n', stream);
+	if (io_ret <= 0) {
+		return false;
+	}
+
+	/*
+	 * All printing successful
+	 */
+	return true;
+}
+
+
+/*
  * NonOverlappingTemplateMatchings_print - print to results.txt, data*.txt, stats.txt for all iterations
  *
  * given:
@@ -937,9 +1088,11 @@ NonOverlappingTemplateMatchings_print(struct state *state)
 	struct nonover_stats *nonover_stat;	// current nonover_stats for a given iteration
 	FILE *stats = NULL;			// Open stats.txt file
 	FILE *results = NULL;			// Open results.txt file
+	FILE *table = NULL;			// Open table.csv file
 	FILE *data = NULL;			// Open data*.txt file
 	char *stats_txt = NULL;			// Pathname for stats.txt
 	char *results_txt = NULL;		// Pathname for results.txt
+	char *table_csv = NULL;			// Pathname for table.csv
 	char *data_txt = NULL;			// Pathname for data*.txt
 	char data_filename[BUFSIZ + 1];		// Basename for a given data*.txt pathname
 	bool ok;				// true -> I/O was OK
@@ -995,6 +1148,22 @@ NonOverlappingTemplateMatchings_print(struct state *state)
 	results = openTruncate(results_txt);
 
 	/*
+	 * Open table.csv file
+	 */
+	table_csv = filePathName(state->subDir[test_num], "table.csv");
+	dbg(DBG_HIGH, "about to open/truncate: %s", table_csv);
+	table = openTruncate(table_csv);
+
+	/*
+	 * Print table header to table.csv
+	 */
+	errno = 0;		// paranoia
+	ok = NonOverlappingTemplateMatchings_print_table_header(table, state);
+	if (ok == false) {
+		errp(135, __func__, "error in writing to %s", table_csv);
+	}
+
+	/*
 	 * Write results.txt and stats.txt files
 	 */
 	nonstat_index = 0;
@@ -1012,6 +1181,16 @@ NonOverlappingTemplateMatchings_print(struct state *state)
 		ok = NonOverlappingTemplateMatchings_print_stat(stats, state, stat, state->p_val[test_num], nonstat_index);
 		if (ok == false) {
 			errp(135, __func__, "error in writing to %s", stats_txt);
+		}
+
+		/*
+		 * Print table to table.csv
+		 */
+		errno = 0;	// paranoia
+		ok = NonOverlappingTemplateMatchings_print_table_line(table, i, state->p_val[test_num],
+		      nonstat_index, numOfTemplates[state->tp.nonOverlappingTemplateLength]);
+		if (ok == false) {
+			errp(135, __func__, "error in writing to %s", table_csv);
 		}
 
 		/*
@@ -1073,6 +1252,22 @@ NonOverlappingTemplateMatchings_print(struct state *state)
 	}
 	free(results_txt);
 	results_txt = NULL;
+
+	/*
+	 * Flush and close table.csv, free pathname
+	 */
+	errno = 0;		// paranoia
+	io_ret = fflush(table);
+	if (io_ret != 0) {
+		errp(135, __func__, "error flushing to: %s", table_csv);
+	}
+	errno = 0;		// paranoia
+	io_ret = fclose(table);
+	if (io_ret != 0) {
+		errp(135, __func__, "error closing: %s", table_csv);
+	}
+	free(table_csv);
+	table_csv = NULL;
 
 	/*
 	 * Write data*.txt for each data file if we need to partition results
